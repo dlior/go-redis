@@ -3,75 +3,99 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 )
 
-const userHashNamePrefix = "user:"
-const userIDCounter = "userid_counter"
+func addUser(w http.ResponseWriter, req *http.Request) {
 
-func add(w http.ResponseWriter, req *http.Request) {
-	var user map[string]string
-
-	err := json.NewDecoder(req.Body).Decode(&user)
+	userB, err := io.ReadAll(req.Body)
 	if err != nil {
-		log.Println("failed to decode json payload", err)
+		log.Println("failed to read payload", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer req.Body.Close()
+
+	exists, err := client.SIsMember(context.Background(), usersSet, string(userB)).Result()
+	if err != nil {
+		log.Println("could not check user", string(userB), "in set", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Println("user", user)
-
-	id, err := client.Incr(context.Background(), userIDCounter).Result()
-	if err != nil {
-		log.Println("failed to generate userid", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if !exists {
+		err = client.SAdd(context.Background(), usersSet, string(userB)).Err()
+		if err != nil {
+			log.Println("could not add user", string(userB), "to set", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Println("added user", string(userB))
+	} else {
+		log.Println("user", string(userB), "already exists")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprintln(w, string(userB)+" already exists")
 	}
-
-	userHashName := userHashNamePrefix + strconv.Itoa(int(id))
-	err = client.HSet(req.Context(), userHashName, user).Err()
-
-	if err != nil {
-		log.Println("failed to save user", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Add("Location", "http://"+req.Host+"/"+strconv.Itoa(int(id)))
-	w.WriteHeader(http.StatusCreated)
-
-	log.Println("added user", userHashName)
 }
 
-func get(w http.ResponseWriter, req *http.Request) {
-	vars := mux.Vars(req)
-	id := vars["id"]
+func play(w http.ResponseWriter, req *http.Request) {
+	//simulate
 
-	log.Println("searching for user", id)
+	go func() {
+		for {
+			log.Println("game simulation running...")
 
-	userHashName := userHashNamePrefix + id
+			members, err := client.SMembers(context.Background(), usersSet).Result()
+			if err != nil {
+				log.Println("could get users", err)
+				return
+			}
 
-	user, err := client.HGetAll(req.Context(), userHashName).Result()
+			for _, member := range members {
+				_, err := client.ZIncrBy(context.Background(), gameLeaderboard, float64(rand.Intn(20)+1), member).Result()
+				if err != nil {
+					log.Println("could get incr score for member", err)
+					return
+				}
+				//log.Println("updated score for member", member, "current score", currScore)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func leaderboard(w http.ResponseWriter, req *http.Request) {
+
+	n := mux.Vars(req)["n"]
+	log.Println("fetching top", n, "players")
+
+	num, _ := strconv.Atoi(n)
+
+	//top 5
+	leaders, err := client.ZRevRangeWithScores(context.Background(), gameLeaderboard, 0, int64(num-1)).Result()
+
 	if err != nil {
-		log.Println("error fetching user", err)
+		log.Println("failed to query sorted set", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if len(user) == 0 {
-		log.Println("user with id", id, "not found")
-		http.Error(w, "user does not exist ", http.StatusNotFound)
-		return
-	}
-
-	err = json.NewEncoder(w).Encode(user)
+	err = json.NewEncoder(w).Encode(leaders)
 	if err != nil {
-		log.Println("failed to encode user data", err)
+		log.Println("failed to encode leaderboard info", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log.Println("successfully fetched leaderboard info....")
 }
