@@ -4,36 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/gorilla/mux"
 )
 
-type Leader struct {
+type Member struct {
 	Member string `json:"name"`
 	Score  uint   `json:"score"`
 }
 
-func health(w http.ResponseWriter, req *http.Request) {
+func health(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("application is healthy.\n"))
 }
 
-func addPlayer(w http.ResponseWriter, req *http.Request) {
-	player, err := io.ReadAll(req.Body)
+func addPlayer(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]string
+
+	ctx := context.Background()
+
+	err := json.NewDecoder(r.Body).Decode(&payload)
 	if err != nil {
-		log.Printf("failed to read player.\nerror message - %v", err)
+		log.Printf("failed to decode payload.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer req.Body.Close()
 
-	ctx := context.Background()
-	exists, err := client.SIsMember(ctx, players, string(player)).Result()
+	player := payload["name"]
+	exists, err := client.SIsMember(ctx, players, player).Result()
 	if err != nil {
 		log.Printf("failed to verify player.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -57,7 +57,7 @@ func addPlayer(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func play(w http.ResponseWriter, req *http.Request) {
+func play(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		for {
 			fmt.Println("simulation started...")
@@ -85,22 +85,22 @@ func play(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func leaders(w http.ResponseWriter, req *http.Request) {
-	var leaders []Leader
+func leaders(w http.ResponseWriter, r *http.Request) {
+	var members []Member
 	ctx := context.Background()
-	members, err := client.ZRevRangeWithScores(ctx, leaderboard, 0, -1).Result()
+	leaders, err := client.ZRevRangeWithScores(ctx, leaderboard, 0, -1).Result()
 	if err != nil {
 		log.Printf("failed to read leaderboard sorted set.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	for _, member := range members {
-		leader := Leader{member.Member.(string), uint(member.Score)}
-		leaders = append(leaders, leader)
+	for _, leader := range leaders {
+		member := Member{leader.Member.(string), uint(leader.Score)}
+		members = append(members, member)
 	}
 
-	err = json.NewEncoder(w).Encode(leaders)
+	err = json.NewEncoder(w).Encode(members)
 	if err != nil {
 		log.Printf("failed to encode leaders.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -108,25 +108,26 @@ func leaders(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func top(w http.ResponseWriter, req *http.Request) {
-	n := mux.Vars(req)["n"]
+func top(w http.ResponseWriter, r *http.Request) {
+	var members []Member
+
+	n := r.PathValue("n")
 	num, _ := strconv.Atoi(n)
 
-	var leaders []Leader
 	ctx := context.Background()
-	members, err := client.ZRevRangeWithScores(ctx, leaderboard, 0, int64(num-1)).Result()
+	leaders, err := client.ZRevRangeWithScores(ctx, leaderboard, 0, int64(num-1)).Result()
 	if err != nil {
 		log.Printf("failed to read leaderboard sorted set.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	for _, member := range members {
-		leader := Leader{member.Member.(string), uint(member.Score)}
-		leaders = append(leaders, leader)
+	for _, leader := range leaders {
+		member := Member{leader.Member.(string), uint(leader.Score)}
+		members = append(members, member)
 	}
 
-	err = json.NewEncoder(w).Encode(leaders)
+	err = json.NewEncoder(w).Encode(members)
 	if err != nil {
 		log.Printf("failed to encode leaders.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

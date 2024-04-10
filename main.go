@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/gorilla/mux"
 )
 
 var client *redis.Client
@@ -46,13 +45,13 @@ func init() {
 }
 
 func main() {
-	r := mux.NewRouter()
+	r := http.NewServeMux()
 
-	r.HandleFunc("/", health).Methods(http.MethodGet)
-	r.HandleFunc("/add-player", addPlayer).Methods(http.MethodPost)
-	r.HandleFunc("/play", play).Methods(http.MethodPost)
-	r.HandleFunc("/top/{n}", top).Methods(http.MethodGet)
-	r.HandleFunc("/leaders", leaders).Methods(http.MethodGet)
+	r.HandleFunc("GET /", health)
+	r.HandleFunc("POST /add-player", addPlayer)
+	r.HandleFunc("POST /play", play)
+	r.HandleFunc("GET /top/{n}", top)
+	r.HandleFunc("GET /leaders", leaders)
 
 	log.Println("HTTP server is running on port 8080.")
 	log.Fatalln(http.ListenAndServe(":8080", r))
