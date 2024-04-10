@@ -14,58 +14,69 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func addUser(w http.ResponseWriter, req *http.Request) {
+type Leader struct {
+	Member string `json:"name"`
+	Score  uint   `json:"score"`
+}
 
-	userB, err := io.ReadAll(req.Body)
+func health(w http.ResponseWriter, req *http.Request) {
+	w.Write([]byte("application is healthy.\n"))
+}
+
+func addPlayer(w http.ResponseWriter, req *http.Request) {
+	player, err := io.ReadAll(req.Body)
 	if err != nil {
-		log.Println("failed to read payload", err)
+		log.Printf("failed to read player.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer req.Body.Close()
 
-	exists, err := client.SIsMember(context.Background(), usersSet, string(userB)).Result()
+	ctx := context.Background()
+	exists, err := client.SIsMember(ctx, players, string(player)).Result()
 	if err != nil {
-		log.Println("could not check user", string(userB), "in set", err)
+		log.Printf("failed to verify player.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if !exists {
-		err = client.SAdd(context.Background(), usersSet, string(userB)).Err()
+	switch exists {
+	case true:
+		log.Println("player", string(player), "already exists.")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprintln(w, string(player), "already exists.")
+	case false:
+		err := client.SAdd(ctx, players, string(player)).Err()
 		if err != nil {
-			log.Println("could not add user", string(userB), "to set", err)
+			log.Printf("failed to add player to players set.\nerror message - %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Println("added user", string(userB))
-	} else {
-		log.Println("user", string(userB), "already exists")
-		w.WriteHeader(http.StatusConflict)
-		fmt.Fprintln(w, string(userB)+" already exists")
 	}
+
+	w.WriteHeader(http.StatusCreated)
 }
 
 func play(w http.ResponseWriter, req *http.Request) {
-	//simulate
-
 	go func() {
 		for {
-			log.Println("game simulation running...")
+			fmt.Println("simulation started...")
 
-			members, err := client.SMembers(context.Background(), usersSet).Result()
+			ctx := context.Background()
+			members, err := client.SMembers(ctx, players).Result()
 			if err != nil {
-				log.Println("could get users", err)
+				log.Printf("failed to read players set.\nerror message - %v", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
 			for _, member := range members {
-				_, err := client.ZIncrBy(context.Background(), gameLeaderboard, float64(rand.Intn(20)+1), member).Result()
+				err := client.ZIncrBy(ctx, leaderboard, float64(rand.Intn(20)+1), member).Err()
 				if err != nil {
-					log.Println("could get incr score for member", err)
+					log.Printf("failed to read players set.\nerror message - %v", err)
+					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				//log.Println("updated score for member", member, "current score", currScore)
 			}
 			time.Sleep(5 * time.Second)
 		}
@@ -74,28 +85,52 @@ func play(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func leaderboard(w http.ResponseWriter, req *http.Request) {
-
-	n := mux.Vars(req)["n"]
-	log.Println("fetching top", n, "players")
-
-	num, _ := strconv.Atoi(n)
-
-	//top 5
-	leaders, err := client.ZRevRangeWithScores(context.Background(), gameLeaderboard, 0, int64(num-1)).Result()
-
+func leaders(w http.ResponseWriter, req *http.Request) {
+	var leaders []Leader
+	ctx := context.Background()
+	members, err := client.ZRevRangeWithScores(ctx, leaderboard, 0, -1).Result()
 	if err != nil {
-		log.Println("failed to query sorted set", err)
+		log.Printf("failed to read leaderboard sorted set.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	for _, member := range members {
+		leader := Leader{member.Member.(string), uint(member.Score)}
+		leaders = append(leaders, leader)
 	}
 
 	err = json.NewEncoder(w).Encode(leaders)
 	if err != nil {
-		log.Println("failed to encode leaderboard info", err)
+		log.Printf("failed to encode leaders.\nerror message - %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+func top(w http.ResponseWriter, req *http.Request) {
+	n := mux.Vars(req)["n"]
+	num, _ := strconv.Atoi(n)
+
+	var leaders []Leader
+	ctx := context.Background()
+	members, err := client.ZRevRangeWithScores(ctx, leaderboard, 0, int64(num-1)).Result()
+	if err != nil {
+		log.Printf("failed to read leaderboard sorted set.\nerror message - %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	log.Println("successfully fetched leaderboard info....")
+	for _, member := range members {
+		leader := Leader{member.Member.(string), uint(member.Score)}
+		leaders = append(leaders, leader)
+	}
+
+	err = json.NewEncoder(w).Encode(leaders)
+	if err != nil {
+		log.Printf("failed to encode leaders.\nerror message - %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 }
